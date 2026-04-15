@@ -7,72 +7,74 @@ Original file is located at
     https://colab.research.google.com/drive/1EC2qcp0aoctOiWucaB8LqXBeG93uT9Tw
 """
 
+import mechanicalsoup
+import pandas as pd
+import re
+import time
+from IPython.display import display, HTML
+from google.colab import files
 import streamlit as st
 
-try:
-    import pandas as pd
-    import mechanicalsoup
-    import re
-    import time
-    import io
-except ImportError as e:
-    st.error(f"❌ Missing library: {e}")
-    st.info("Please check your requirements.txt includes all dependencies.")
-    st.stop()
-
-# --- Page Config ---
 st.set_page_config(
     page_title="SEEK Job Scraper",
     page_icon="🔍",
     layout="centered"
 )
 
+
 # --- App Title ---
 st.title("🔍 SEEK Job Scraper")
 st.write("Scrapes current job listings from SEEK for **Rotorua & Central Bay of Plenty** (25km radius).")
 st.divider()
 
-# --- Configuration ---
-INITIAL_URL = "https://nz.seek.com/jobs/in-Rotorua-Central-Bay-of-Plenty?distance=25"
-REQUEST_DELAY_SECONDS = 4
+# --- Select the website and region for Rotorua within 25km distance --- #
+INITIAL_URL = "https://nz.seek.com/jobs/in-Rotorua-Central-Bay-of-Plenty?distance=25" # this can be customised for other job ad websites and distance can be increased/ decreased
+CSV_FILENAME = 'Rotorua_job_listings_all_pages.csv'
+REQUEST_DELAY_SECONDS = 4 # Delay between page requests to be polite
 
-
-# --- Helper: Extract Job Details from a Single Card ---
-def extract_job_details_from_card(card, browser):
+# --- Helper Function to Extract Job Details from a Single Card ---
+def extract_job_details_from_card(card, browser, page_number, card_index):
     job_title = 'N/A'
     job_url = 'N/A'
     company_name = 'N/A'
     location = 'N/A'
     job_category = 'N/A'
 
-    # Job Title and URL
+    # --- Extract Job Title and URL ---
     job_title_tag = card.find('a', {'data-automation': 'jobTitle'})
     if job_title_tag and job_title_tag.get_text(strip=True):
         job_title = job_title_tag.get_text(strip=True)
         job_url = browser.absolute_url(job_title_tag['href'])
     else:
-        return None
+        # If job title not found, skip this card as it's the primary identifier
+        if card_index < 3: # Print debug for first few only
+            print(f"DEBUG: Job title not found or empty for card {card_index+1} on page {page_number}. Skipping.")
+        return None # Return None to indicate extraction failure for this card
 
-    # Company Name
+    # --- Extract Company Name ---
     company_name_tag = card.find('span', {'data-automation': 'jobCompany'}) or \
                        card.find('a', {'data-automation': 'jobCompany'})
     if company_name_tag:
         company_name = company_name_tag.get_text(strip=True)
     elif 'aria-label' in card.attrs and '-' in card['aria-label']:
-        fallback = card['aria-label'].split('-', 1)[0].replace('job card', '').strip()
-        if fallback:
-            company_name = fallback
+        company_name_from_aria = card['aria-label'].split('-', 1)[0].replace('job card', '').strip()
+        if company_name_from_aria:
+            company_name = company_name_from_aria
 
-    # Location
-    location_element = card.find(attrs={'data-automation': 'job-detail-location'}) or \
-                       card.find('span', {'data-automation': 'jobLocation'})
+    # --- Extract Location ---
+    location_element = card.find(attrs={'data-automation': 'job-detail-location'}) # Try job-detail-location first
+    if not location_element:
+        location_element = card.find('span', {'data-automation': 'jobLocation'}) # Fallback to jobLocation span
+
     if location_element:
         location_link = location_element.find('a')
         location = location_link.get_text(strip=True) if location_link else location_element.get_text(strip=True)
 
-    # Category
-    category_element = card.find(attrs={'data-automation': 'job-detail-classification'}) or \
-                       card.find('span', {'data-automation': 'jobClassification'})
+    # --- Extract Job Category ---
+    category_element = card.find(attrs={'data-automation': 'job-detail-classification'}) # Try job-detail-classification first
+    if not category_element:
+        category_element = card.find('span', {'data-automation': 'jobClassification'}) # Fallback to jobClassification span
+
     if category_element:
         category_link = category_element.find('a')
         job_category = category_link.get_text(strip=True) if category_link else category_element.get_text(strip=True)
@@ -85,111 +87,125 @@ def extract_job_details_from_card(card, browser):
         'Link to Ad': job_url
     }
 
-
-# --- Helper: Find Next Page Link ---
+# --- Helper Function to Find Next Page Link ---
 def find_next_page_link(page):
+    next_page_link = None
+
+    # 1. Try the most specific data-automation selector first
     next_page_link = page.find('a', {'data-automation': 'page-next'})
+
+    # 2. Try 'rel="next"' which is common for next page links
     if not next_page_link:
         next_page_link = page.find('a', {'rel': 'next'})
+
+    # 3. Try finding any <a> that has 'Next' or a right arrow symbol in its text
     if not next_page_link:
         next_page_link = page.find('a', string=re.compile(r'Next|>', re.IGNORECASE))
+
     return next_page_link
 
-
-# --- Main Scraper ---
-def run_scraper(status_box, progress_bar):
+# --- Main Scraping Logic ---
+def main_scraper():
+    # Initialize browser
     browser = mechanicalsoup.StatefulBrowser()
     all_jobs_data = []
     page_number = 1
     current_url = INITIAL_URL
 
-    while True:
-        status_box.info(f"⏳ Scraping page {page_number}...")
+    print(f"Starting multi-page scraping from: {current_url}")
 
+    while True:
         try:
+            print(f"\nScraping page {page_number} at URL: {current_url}")
             browser.open(current_url)
             page = browser.get_current_page()
         except Exception as e:
-            status_box.error(f"❌ Could not load page {page_number}: {e}")
+            print(f"ERROR: Could not open URL {current_url}. Error: {e}")
             break
 
         job_cards = page.find_all('article', {'data-testid': 'job-card'})
 
         if not job_cards:
-            status_box.warning(f"No job cards found on page {page_number}. Stopping.")
+            print(f"No job cards found on page {page_number}. Exiting pagination loop.")
+            # Debugging step: print the pagination section if not found
+            print("\n--- Debugging Pagination Section ---")
+            pagination_area = page.find('nav', {'aria-label': 'pagination'}) or \
+                              page.find('div', class_=re.compile(r'pagination', re.IGNORECASE)) # Look for common pagination classes
+            if pagination_area:
+                print("HTML snippet of potential pagination area:")
+                print(pagination_area.prettify())
+            else:
+                print("No element with aria-label='pagination' or common pagination classes found.")
+            print("------------------------------------")
             break
 
-        for card in job_cards:
-            job_details = extract_job_details_from_card(card, browser)
+        current_page_jobs = []
+        for i, card in enumerate(job_cards):
+            job_details = extract_job_details_from_card(card, browser, page_number, i)
             if job_details:
-                all_jobs_data.append(job_details)
+                current_page_jobs.append(job_details)
 
-        progress_bar.progress(min(page_number * 10, 100))  # rough progress indicator
+        all_jobs_data.extend(current_page_jobs)
+        print(f"Collected {len(current_page_jobs)} jobs from page {page_number}. Total collected: {len(all_jobs_data)}")
 
         next_page_link = find_next_page_link(page)
+
         if not next_page_link or not next_page_link.get('href'):
+            print("No next page link found. Finished scraping all available pages.")
             break
 
-        current_url = browser.absolute_url(next_page_link['href'])
-        page_number += 1
-        time.sleep(REQUEST_DELAY_SECONDS)
+        next_page_url_relative = next_page_link['href']
+        current_url = browser.absolute_url(next_page_url_relative)
 
-    return pd.DataFrame(all_jobs_data)
+        page_number += 1
+        time.sleep(REQUEST_DELAY_SECONDS) # Be polite
+
+    print(f"\n--- Scraping Complete ---")
+    print(f"Total unique jobs collected across all pages: {len(all_jobs_data)}")
+
+    # Create DataFrame
+    jobs_df = pd.DataFrame(all_jobs_data)
+
+    # Display the first few rows of the DataFrame
+  #  print("\n--- First 5 rows of the collected data ---")
+   # display(jobs_df.head())
+
+    # Save to CSV
+  #  jobs_df.to_csv(CSV_FILENAME, index=False)
+   # print(f"\nJob listings saved to '{CSV_FILENAME}'.")
+
+
+
+    return jobs_df  # FIX: return so calling code can access the DataFrame
+
+
+# main_scraper() now returns jobs_df so it is accessible
+jobs_df = main_scraper()
+
 
 category_summary = jobs_df['Job Category'].value_counts().reset_index()
 category_summary.columns = ['Job Category', 'Number of Jobs']
+#display(category_summary)
 
 
-# --- Convert DataFrame to Excel in memory ---
-def convert_to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Write the category summary DataFrame to the second sheet
-        category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
-        df.to_excel(writer, index=False, sheet_name='Job Listings')
-    return output.getvalue()
+
+excel_filename = 'Rotorua_Job_Analysis.xlsx'
+
+# Create an Excel writer object
+# The 'engine' parameter is important for handling .xlsx files
+with pd.ExcelWriter(excel_filename, engine='xlsxwriter') as writer:
+    # Write the category summary DataFrame to the second sheet
+    category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
+
+    # Write the job listings DataFrame to the first sheet
+    jobs_df.to_excel(writer, sheet_name='Job Listings', index=False)
 
 
-# --- Run Button ---
-if st.button("▶️  Start Scraping", type="primary", use_container_width=True):
+print(f"\nData saved to '{excel_filename}' with two sheets.")
 
-    status_box = st.empty()
-    progress_bar = st.progress(0)
-
-    jobs_df = run_scraper(status_box, progress_bar)
-
-    progress_bar.progress(100)
-
-    if jobs_df.empty:
-        status_box.error("❌ No jobs were collected. The site structure may have changed.")
-    else:
-        status_box.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
-
-        st.divider()
-
-        # Summary
-        st.subheader("📊 Results Summary")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Jobs", len(jobs_df))
-        col2.metric("Companies", jobs_df['Company Name'].nunique())
-        col3.metric("Categories", jobs_df['Job Category'].nunique())
-
-        # Table Preview
-        st.subheader("📋 Job Listings Preview")
-        st.dataframe(jobs_df, use_container_width=True)
-
-        st.divider()
-
-        # Download Excel
-        excel_data = convert_to_excel(jobs_df)
-        st.download_button(
-            label="📥 Download as Excel (.xlsx)",
-            data=excel_data,
-            file_name="Rotorua_Job_Listings.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary"
-        )
-
-st.divider()
-st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
+# Make the Excel file downloadable
+try:
+    files.download(excel_filename)
+    print("\nExcel file downloaded to your Download Folder.")
+except Exception as e:
+    print(f"ERROR: Could not make Excel file downloadable. Error: {e}")
