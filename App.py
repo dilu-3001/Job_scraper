@@ -167,7 +167,7 @@ Original file is located at
 #     if jobs_df.empty:
 #         status_box.error("❌ No jobs were collected. The site structure may have changed.")
 #     else:
-#         status_box.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
+#         st.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
 # 
 #         st.divider()
 # 
@@ -209,4 +209,3 @@ Original file is located at
 # 
 # st.divider()
 # st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
-
