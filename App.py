@@ -213,4 +213,4 @@ if st.button("▶️  Start Scraping", type="primary", use_container_width=True)
         st.success(f"Excel file '{excel_filename}' is ready for download.")
 
 st.divider()
-st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
+st.caption("Developed by Dilu · Data sourced from SEEK NZ · Any Questions?  email: Insights@rotorunz.com")
