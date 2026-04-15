@@ -7,205 +7,189 @@ Original file is located at
     https://colab.research.google.com/drive/1EC2qcp0aoctOiWucaB8LqXBeG93uT9Tw
 """
 
-# Commented out IPython magic to ensure Python compatibility.
-# %%writefile app.py
-# import mechanicalsoup
-# import pandas as pd
-# import re
-# import time
-# import streamlit as st # Import Streamlit
-# import io # For in-memory Excel file
-# 
-# # --- Streamlit Page Configuration (optional but good practice) ---
-# st.set_page_config(layout="wide", page_title="Job Scraper", page_icon="🕵️")
-# 
-# # --- Select the website and region for Rotorua within 25km distance --- #
-# INITIAL_URL = "https://nz.seek.com/jobs/in-Rotorua-Central-Bay-of-Plenty?distance=25" # this can be customised for other job ad websites and distance can be increased/ decreased
-# REQUEST_DELAY_SECONDS = 4 # Delay between page requests to be polite
-# 
-# # --- Helper Function to Extract Job Details from a Single Card ---
-# def extract_job_details_from_card(card, browser, page_number, card_index):
-#     job_title = 'N/A'
-#     job_url = 'N/A'
-#     company_name = 'N/A'
-#     location = 'N/A'
-#     job_category = 'N/A'
-# 
-#     # --- Extract Job Title and URL ---
-#     job_title_tag = card.find('a', {'data-automation': 'jobTitle'})
-#     if job_title_tag and job_title_tag.get_text(strip=True):
-#         job_title = job_title_tag.get_text(strip=True)
-#         job_url = browser.absolute_url(job_title_tag['href'])
-#     else:
-#         # If job title not found, skip this card as it's the primary identifier
-#         if card_index < 3: # Print debug for first few only
-#             st.write(f"DEBUG: Job title not found or empty for card {card_index+1} on page {page_number}. Skipping.") # Use st.write for Streamlit debug
-#         return None # Return None to indicate extraction failure for this card
-# 
-#     # --- Extract Company Name ---
-#     company_name_tag = card.find('span', {'data-automation': 'jobCompany'}) or \
-#                        card.find('a', {'data-automation': 'jobCompany'})
-#     if company_name_tag:
-#         company_name = company_name_tag.get_text(strip=True)
-#     elif 'aria-label' in card.attrs and '-' in card['aria-label']:
-#         company_name_from_aria = card['aria-label'].split('-', 1)[0].replace('job card', '').strip()
-#         if company_name_from_aria:
-#             company_name = company_name_from_aria
-# 
-#     # --- Extract Location ---
-#     location_element = card.find(attrs={'data-automation': 'job-detail-location'}) # Try job-detail-location first
-#     if not location_element:
-#         location_element = card.find('span', {'data-automation': 'jobLocation'}) # Fallback to jobLocation span
-# 
-#     if location_element:
-#         location_link = location_element.find('a')
-#         location = location_link.get_text(strip=True) if location_link else location_element.get_text(strip=True)
-# 
-#     # --- Extract Job Category ---
-#     category_element = card.find(attrs={'data-automation': 'job-detail-classification'}) # Try job-detail-classification first
-#     if not category_element:
-#         category_element = card.find('span', {'data-automation': 'jobClassification'}) # Fallback to jobClassification span
-# 
-#     if category_element:
-#         category_link = category_element.find('a')
-#         job_category = category_link.get_text(strip=True) if category_link else category_element.get_text(strip=True)
-# 
-#     return {
-#         'Company Name': company_name,
-#         'Job Title': job_title,
-#         'Job Category': job_category,
-#         'Location': location,
-#         'Link to Ad': job_url
-#     }
-# 
-# # --- Helper Function to Find Next Page Link ---
-# def find_next_page_link(page):
-#     next_page_link = None
-# 
-#     # 1. Try the most specific data-automation selector first
-#     next_page_link = page.find('a', {'data-automation': 'page-next'})
-# 
-#     # 2. Try 'rel="next"' which is common for next page links
-#     if not next_page_link:
-#         next_page_link = page.find('a', {'rel': 'next'})
-# 
-#     # 3. Try finding any <a> that has 'Next' or a right arrow symbol in its text
-#     if not next_page_link:
-#         next_page_link = page.find('a', string=re.compile(r'Next|>', re.IGNORECASE))
-# 
-#     return next_page_link
-# 
-# # --- Main Scraping Logic, adapted for Streamlit progress ---
-# def run_scraper(status_box, progress_bar):
-#     browser = mechanicalsoup.StatefulBrowser()
-#     all_jobs_data = []
-#     page_number = 1
-#     current_url = INITIAL_URL
-#     max_pages = 10 # Arbitrary maximum to prevent infinite loops, can be dynamic
-# 
-#     status_box.info(f"Starting multi-page scraping from: {current_url}")
-# 
-#     while page_number <= max_pages:
-#         status_box.info(f"Scraping page {page_number} at URL: {current_url}")
-#         # Update progress (rough estimate, can be improved with total page count if available)
-#         progress_bar.progress(min(page_number * 10, 99))
-# 
-#         try:
-#             browser.open(current_url)
-#             page = browser.get_current_page()
-#         except Exception as e:
-#             status_box.error(f"ERROR: Could not open URL {current_url}. Error: {e}")
-#             break
-# 
-#         job_cards = page.find_all('article', {'data-testid': 'job-card'})
-# 
-#         if not job_cards:
-#             status_box.warning(f"No job cards found on page {page_number}. Exiting pagination loop.")
-#             break
-# 
-#         current_page_jobs = []
-#         for i, card in enumerate(job_cards):
-#             job_details = extract_job_details_from_card(card, browser, page_number, i)
-#             if job_details:
-#                 current_page_jobs.append(job_details)
-# 
-#         all_jobs_data.extend(current_page_jobs)
-#         status_box.info(f"Collected {len(current_page_jobs)} jobs from page {page_number}. Total collected: {len(all_jobs_data)}")
-# 
-#         next_page_link = find_next_page_link(page)
-# 
-#         if not next_page_link or not next_page_link.get('href'):
-#             status_box.info("No next page link found. Finished scraping all available pages.")
-#             break
-# 
-#         next_page_url_relative = next_page_link['href']
-#         current_url = browser.absolute_url(next_page_url_relative)
-# 
-#         page_number += 1
-#         time.sleep(REQUEST_DELAY_SECONDS) # Be polite
-# 
-#     status_box.success(f"--- Scraping Complete --- Total unique jobs collected across all pages: {len(all_jobs_data)}")
-#     progress_bar.progress(100) # Ensure it reaches 100%
-# 
-#     jobs_df = pd.DataFrame(all_jobs_data)
-#     return jobs_df
-# 
-# 
-# 
-# # --- Streamlit App Layout ---
-# st.title("Job Listing Scraper for Rotorua")
-# st.markdown("This app scrapes job listings from SEEK NZ for Rotorua and provides a summary and downloadable Excel file.")
-# 
-# # --- Run Button ---
-# if st.button("▶️  Start Scraping", type="primary", use_container_width=True):
-# 
-#     status_box = st.empty()
-#     progress_bar = st.progress(0)
-# 
-#     jobs_df = run_scraper(status_box, progress_bar)
-# 
-#     if jobs_df.empty:
-#         status_box.error("❌ No jobs were collected. The site structure may have changed.")
-#     else:
-#         st.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
-# 
-#         st.divider()
-# 
-#         # Summary
-#         st.subheader("📊 Results Summary")
-#         col1, col2, col3 = st.columns(3)
-#         col1.metric("Total Jobs", len(jobs_df))
-#         col2.metric("Companies", jobs_df['Company Name'].nunique())
-#         col3.metric("Categories", jobs_df['Job Category'].nunique())
-# 
-#         # Category Summary
-#         st.subheader("Categorical Job Distribution")
-#         category_summary = jobs_df['Job Category'].value_counts().reset_index()
-#         category_summary.columns = ['Job Category', 'Number of Jobs']
-#         st.dataframe(category_summary, use_container_width=True)
-# 
-#         # Table Preview
-#         st.subheader("📋 Job Listings Preview")
-#         st.dataframe(jobs_df, use_container_width=True)
-# 
-#         st.divider()
-# 
-#         # Prepare Excel file for download
-#         excel_filename = 'Rotorua_Job_Analysis.xlsx'
-#         output = io.BytesIO()
-#         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-#             category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
-#             jobs_df.to_excel(writer, sheet_name='Job Listings', index=False)
-#         output.seek(0) # Rewind to the beginning of the stream
-# 
-#         st.download_button(
-#             label="⬇️ Download Excel Report",
-#             data=output,
-#             file_name=excel_filename,
-#             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-#             use_container_width=True
-#         )
-#         st.success(f"Excel file '{excel_filename}' is ready for download.")
-# 
-# st.divider()
-# st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
+import streamlit as st
+
+try:
+    import pandas as pd
+    import mechanicalsoup
+    import re
+    import time
+    import io
+except ImportError as e:
+    st.error(f"❌ Missing library: {e}")
+    st.info("Please check your requirements.txt includes all dependencies.")
+    st.stop()
+
+# --- Page Config ---
+st.set_page_config(
+    page_title="SEEK Job Scraper",
+    page_icon="🔍",
+    layout="centered"
+)
+
+# --- App Title ---
+st.title("🔍 SEEK Job Scraper")
+st.write("Scrapes current job listings from SEEK for **Rotorua & Central Bay of Plenty** (25km radius).")
+st.divider()
+
+# --- Configuration ---
+INITIAL_URL = "https://nz.seek.com/jobs/in-Rotorua-Central-Bay-of-Plenty?distance=25"
+REQUEST_DELAY_SECONDS = 4
+
+
+# --- Helper: Extract Job Details from a Single Card ---
+def extract_job_details_from_card(card, browser):
+    job_title = 'N/A'
+    job_url = 'N/A'
+    company_name = 'N/A'
+    location = 'N/A'
+    job_category = 'N/A'
+
+    # Job Title and URL
+    job_title_tag = card.find('a', {'data-automation': 'jobTitle'})
+    if job_title_tag and job_title_tag.get_text(strip=True):
+        job_title = job_title_tag.get_text(strip=True)
+        job_url = browser.absolute_url(job_title_tag['href'])
+    else:
+        return None
+
+    # Company Name
+    company_name_tag = card.find('span', {'data-automation': 'jobCompany'}) or \
+                       card.find('a', {'data-automation': 'jobCompany'})
+    if company_name_tag:
+        company_name = company_name_tag.get_text(strip=True)
+    elif 'aria-label' in card.attrs and '-' in card['aria-label']:
+        fallback = card['aria-label'].split('-', 1)[0].replace('job card', '').strip()
+        if fallback:
+            company_name = fallback
+
+    # Location
+    location_element = card.find(attrs={'data-automation': 'job-detail-location'}) or \
+                       card.find('span', {'data-automation': 'jobLocation'})
+    if location_element:
+        location_link = location_element.find('a')
+        location = location_link.get_text(strip=True) if location_link else location_element.get_text(strip=True)
+
+    # Category
+    category_element = card.find(attrs={'data-automation': 'job-detail-classification'}) or \
+                       card.find('span', {'data-automation': 'jobClassification'})
+    if category_element:
+        category_link = category_element.find('a')
+        job_category = category_link.get_text(strip=True) if category_link else category_element.get_text(strip=True)
+
+    return {
+        'Company Name': company_name,
+        'Job Title': job_title,
+        'Job Category': job_category,
+        'Location': location,
+        'Link to Ad': job_url
+    }
+
+
+# --- Helper: Find Next Page Link ---
+def find_next_page_link(page):
+    next_page_link = page.find('a', {'data-automation': 'page-next'})
+    if not next_page_link:
+        next_page_link = page.find('a', {'rel': 'next'})
+    if not next_page_link:
+        next_page_link = page.find('a', string=re.compile(r'Next|>', re.IGNORECASE))
+    return next_page_link
+
+
+# --- Main Scraper ---
+def run_scraper(status_box, progress_bar):
+    browser = mechanicalsoup.StatefulBrowser()
+    all_jobs_data = []
+    page_number = 1
+    current_url = INITIAL_URL
+
+    while True:
+        status_box.info(f"⏳ Scraping page {page_number}...")
+
+        try:
+            browser.open(current_url)
+            page = browser.get_current_page()
+        except Exception as e:
+            status_box.error(f"❌ Could not load page {page_number}: {e}")
+            break
+
+        job_cards = page.find_all('article', {'data-testid': 'job-card'})
+
+        if not job_cards:
+            status_box.warning(f"No job cards found on page {page_number}. Stopping.")
+            break
+
+        for card in job_cards:
+            job_details = extract_job_details_from_card(card, browser)
+            if job_details:
+                all_jobs_data.append(job_details)
+
+        progress_bar.progress(min(page_number * 10, 100))  # rough progress indicator
+
+        next_page_link = find_next_page_link(page)
+        if not next_page_link or not next_page_link.get('href'):
+            break
+
+        current_url = browser.absolute_url(next_page_link['href'])
+        page_number += 1
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    return pd.DataFrame(all_jobs_data)
+
+category_summary = jobs_df['Job Category'].value_counts().reset_index()
+category_summary.columns = ['Job Category', 'Number of Jobs']
+
+
+# --- Convert DataFrame to Excel in memory ---
+def convert_to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write the category summary DataFrame to the second sheet
+        category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
+        df.to_excel(writer, index=False, sheet_name='Job Listings')
+    return output.getvalue()
+
+
+# --- Run Button ---
+if st.button("▶️  Start Scraping", type="primary", use_container_width=True):
+
+    status_box = st.empty()
+    progress_bar = st.progress(0)
+
+    jobs_df = run_scraper(status_box, progress_bar)
+
+    progress_bar.progress(100)
+
+    if jobs_df.empty:
+        status_box.error("❌ No jobs were collected. The site structure may have changed.")
+    else:
+        status_box.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
+
+        st.divider()
+
+        # Summary
+        st.subheader("📊 Results Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Jobs", len(jobs_df))
+        col2.metric("Companies", jobs_df['Company Name'].nunique())
+        col3.metric("Categories", jobs_df['Job Category'].nunique())
+
+        # Table Preview
+        st.subheader("📋 Job Listings Preview")
+        st.dataframe(jobs_df, use_container_width=True)
+
+        st.divider()
+
+        # Download Excel
+        excel_data = convert_to_excel(jobs_df)
+        st.download_button(
+            label="📥 Download as Excel (.xlsx)",
+            data=excel_data,
+            file_name="Rotorua_Job_Listings.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary"
+        )
+
+st.divider()
+st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
