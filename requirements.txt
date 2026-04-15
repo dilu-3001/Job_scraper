@@ -2,12 +2,5 @@ mechanicalsoup
 pandas
 streamlit
 xlsxwriter
-MechanicalSoup
-pandas
-re
-time
-openpyxl
-lxml
-requests
-beautifulsoup4
+
  
