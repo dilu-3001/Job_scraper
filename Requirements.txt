@@ -1,4 +1,3 @@
-mechanicalsoup
 pandas
 re
 time
@@ -7,3 +6,9 @@ openpyxl
 lxml
 requests
 xlsxwriter
+
+MechanicalSoup
+
+requests
+beautifulsoup4
+ 
