@@ -11,9 +11,10 @@ import mechanicalsoup
 import pandas as pd
 import re
 import time
-from IPython.display import display, HTML
-from google.colab import files
 import streamlit as st
+import io # Needed for in-memory Excel file handling
+# Removed: from IPython.display import display, HTML
+# Removed: from google.colab import files
 
 st.set_page_config(
     page_title="SEEK Job Scraper",
@@ -29,7 +30,7 @@ st.divider()
 
 # --- Select the website and region for Rotorua within 25km distance --- #
 INITIAL_URL = "https://nz.seek.com/jobs/in-Rotorua-Central-Bay-of-Plenty?distance=25" # this can be customised for other job ad websites and distance can be increased/ decreased
-CSV_FILENAME = 'Rotorua_job_listings_all_pages.csv'
+# Removed: CSV_FILENAME = 'Rotorua_job_listings_all_pages.csv' # Not used in Streamlit app for direct file saving
 REQUEST_DELAY_SECONDS = 4 # Delay between page requests to be polite
 
 # --- Helper Function to Extract Job Details from a Single Card ---
@@ -48,7 +49,7 @@ def extract_job_details_from_card(card, browser, page_number, card_index):
     else:
         # If job title not found, skip this card as it's the primary identifier
         if card_index < 3: # Print debug for first few only
-            print(f"DEBUG: Job title not found or empty for card {card_index+1} on page {page_number}. Skipping.")
+            st.warning(f"DEBUG: Job title not found or empty for card {card_index+1} on page {page_number}. Skipping.") # Use st.warning for Streamlit
         return None # Return None to indicate extraction failure for this card
 
     # --- Extract Company Name ---
@@ -104,39 +105,32 @@ def find_next_page_link(page):
 
     return next_page_link
 
-# --- Main Scraping Logic ---
-def main_scraper():
-    # Initialize browser
+# --- Main Scraping Logic, adapted for Streamlit progress ---
+def run_scraper(status_box, progress_bar):
     browser = mechanicalsoup.StatefulBrowser()
     all_jobs_data = []
     page_number = 1
     current_url = INITIAL_URL
+    max_pages = 10 # Arbitrary maximum to prevent infinite loops, adjust as needed
 
-    print(f"Starting multi-page scraping from: {current_url}")
+    status_box.info(f"Starting multi-page scraping from: {current_url}")
 
-    while True:
+    while page_number <= max_pages:
+        status_box.info(f"Scraping page {page_number} at URL: {current_url}")
+        # Update progress (rough estimate, can be improved with total page count if available)
+        progress_bar.progress(min(page_number * 10, 99))
+
         try:
-            print(f"\nScraping page {page_number} at URL: {current_url}")
             browser.open(current_url)
             page = browser.get_current_page()
         except Exception as e:
-            print(f"ERROR: Could not open URL {current_url}. Error: {e}")
+            status_box.error(f"ERROR: Could not open URL {current_url}. Error: {e}")
             break
 
         job_cards = page.find_all('article', {'data-testid': 'job-card'})
 
         if not job_cards:
-            print(f"No job cards found on page {page_number}. Exiting pagination loop.")
-            # Debugging step: print the pagination section if not found
-            print("\n--- Debugging Pagination Section ---")
-            pagination_area = page.find('nav', {'aria-label': 'pagination'}) or \
-                              page.find('div', class_=re.compile(r'pagination', re.IGNORECASE)) # Look for common pagination classes
-            if pagination_area:
-                print("HTML snippet of potential pagination area:")
-                print(pagination_area.prettify())
-            else:
-                print("No element with aria-label='pagination' or common pagination classes found.")
-            print("------------------------------------")
+            status_box.warning(f"No job cards found on page {page_number}. Exiting pagination loop.")
             break
 
         current_page_jobs = []
@@ -146,12 +140,12 @@ def main_scraper():
                 current_page_jobs.append(job_details)
 
         all_jobs_data.extend(current_page_jobs)
-        print(f"Collected {len(current_page_jobs)} jobs from page {page_number}. Total collected: {len(all_jobs_data)}")
+        status_box.info(f"Collected {len(current_page_jobs)} jobs from page {page_number}. Total collected: {len(all_jobs_data)}")
 
         next_page_link = find_next_page_link(page)
 
         if not next_page_link or not next_page_link.get('href'):
-            print("No next page link found. Finished scraping all available pages.")
+            status_box.info("No next page link found. Finished scraping all available pages.")
             break
 
         next_page_url_relative = next_page_link['href']
@@ -160,52 +154,63 @@ def main_scraper():
         page_number += 1
         time.sleep(REQUEST_DELAY_SECONDS) # Be polite
 
-    print(f"\n--- Scraping Complete ---")
-    print(f"Total unique jobs collected across all pages: {len(all_jobs_data)}")
+    status_box.success(f"--- Scraping Complete --- Total unique jobs collected across all pages: {len(all_jobs_data)}")
+    progress_bar.progress(100) # Ensure it reaches 100%
 
-    # Create DataFrame
     jobs_df = pd.DataFrame(all_jobs_data)
-
-    # Display the first few rows of the DataFrame
-  #  print("\n--- First 5 rows of the collected data ---")
-   # display(jobs_df.head())
-
-    # Save to CSV
-  #  jobs_df.to_csv(CSV_FILENAME, index=False)
-   # print(f"\nJob listings saved to '{CSV_FILENAME}'.")
+    return jobs_df
 
 
+# --- Run Button --- (This section is the main part of the Streamlit app)
+if st.button("▶️  Start Scraping", type="primary", use_container_width=True):
 
-    return jobs_df  # FIX: return so calling code can access the DataFrame
+    status_box = st.empty()
+    progress_bar = st.progress(0)
 
+    jobs_df = run_scraper(status_box, progress_bar)
 
-# main_scraper() now returns jobs_df so it is accessible
-jobs_df = main_scraper()
+    if jobs_df.empty:
+        status_box.error("❌ No jobs were collected. The site structure may have changed or no jobs match.")
+    else:
+        status_box.success(f"✅ Done! Found **{len(jobs_df)} jobs** across all pages.")
 
+        st.divider()
 
-category_summary = jobs_df['Job Category'].value_counts().reset_index()
-category_summary.columns = ['Job Category', 'Number of Jobs']
-#display(category_summary)
+        # Summary
+        st.subheader("📊 Results Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Jobs", len(jobs_df))
+        col2.metric("Companies", jobs_df['Company Name'].nunique())
+        col3.metric("Categories", jobs_df['Job Category'].nunique())
 
+        # Category Summary
+        st.subheader("Categorical Job Distribution")
+        category_summary = jobs_df['Job Category'].value_counts().reset_index()
+        category_summary.columns = ['Job Category', 'Number of Jobs']
+        st.dataframe(category_summary, use_container_width=True)
 
+        # Table Preview
+        st.subheader("📋 Job Listings Preview")
+        st.dataframe(jobs_df, use_container_width=True)
 
-excel_filename = 'Rotorua_Job_Analysis.xlsx'
+        st.divider()
 
-# Create an Excel writer object
-# The 'engine' parameter is important for handling .xlsx files
-with pd.ExcelWriter(excel_filename, engine='xlsxwriter') as writer:
-    # Write the category summary DataFrame to the second sheet
-    category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
+        # Prepare Excel file for download
+        excel_filename = 'Rotorua_Job_Analysis.xlsx'
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
+            jobs_df.to_excel(writer, sheet_name='Job Listings', index=False)
+        output.seek(0) # Rewind to the beginning of the stream
 
-    # Write the job listings DataFrame to the first sheet
-    jobs_df.to_excel(writer, sheet_name='Job Listings', index=False)
+        st.download_button(
+            label="⬇️ Download Excel Report",
+            data=output,
+            file_name=excel_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        st.success(f"Excel file '{excel_filename}' is ready for download.")
 
-
-print(f"\nData saved to '{excel_filename}' with two sheets.")
-
-# Make the Excel file downloadable
-try:
-    files.download(excel_filename)
-    print("\nExcel file downloaded to your Download Folder.")
-except Exception as e:
-    print(f"ERROR: Could not make Excel file downloadable. Error: {e}")
+st.divider()
+st.caption("Built with Streamlit · Data sourced from SEEK NZ · Please use responsibly.")
